@@ -3,26 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Spider-Gwen: Spider-Verse Quest</title>
+    <title>Spider-Gwen Mobile</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
-        #joystick-zone { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border-radius: 50%; }
-        #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; text-shadow: 2px 2px #000; }
-        #instructions { position: absolute; bottom: 20px; right: 20px; color: white; background: rgba(0,0,0,0.5); padding: 10px; border-radius: 5px; }
+        body { margin: 0; overflow: hidden; background: #111; font-family: sans-serif; }
+        #container { width: 100vw; height: 100vh; }
+        #joystick-zone { position: absolute; bottom: 50px; left: 50px; width: 150px; height: 150px; z-index: 10; }
+        #ui { position: absolute; top: 20px; left: 20px; color: white; pointer-events: none; z-index: 10; }
+        #debug { position: absolute; top: 80px; left: 20px; color: #ff0055; font-size: 12px; z-index: 10; }
     </style>
 </head>
 <body>
 
     <div id="ui">
-        <h1>Spider-Gwen</h1>
-        <p>NPCs nearby: <span id="npc-count">0</span></p>
+        <h2 style="margin:0">Spider-Gwen</h2>
+        <div id="status">Loading Model...</div>
     </div>
-
-    <div id="instructions">
-        WASD to Move | SHIFT to Dash | SPACE to Jump | Click to Hit
-    </div>
-
+    <div id="debug"></div>
     <div id="joystick-zone"></div>
+    <div id="container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
 
     <script type="importmap">
         {
@@ -36,130 +36,108 @@
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-        // --- GAME SETTINGS ---
-        let scene, camera, renderer, clock, player, mixer, animations = {};
-        let currentAction, moveDirection = new THREE.Vector3();
-        let npcs = [];
-        
-        const keys = { w: false, a: false, s: false, d: false, shift: false };
+        let scene, camera, renderer, clock, player, mixer;
+        let actions = {};
+        let currentAction;
+        let moveData = { x: 0, y: 0, active: false };
+
+        const debugEl = document.getElementById('debug');
+        const statusEl = document.getElementById('status');
 
         init();
 
         function init() {
             scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87ceeb); // Sky blue
-            scene.fog = new THREE.Fog(0x87ceeb, 10, 100);
+            scene.background = new THREE.Color(0x220022); // Dark purple vibe
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.set(0, 5, 10);
 
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.shadowMap.enabled = true;
-            document.body.appendChild(renderer.domElement);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('container').appendChild(renderer.domElement);
 
             clock = new THREE.Clock();
 
             // Lights
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
-            scene.add(ambientLight);
-            const sun = new THREE.DirectionalLight(0xffffff, 1);
-            sun.position.set(10, 20, 10);
-            sun.castShadow = true;
+            scene.add(new THREE.AmbientLight(0xffffff, 1));
+            const sun = new THREE.DirectionalLight(0xffffff, 2);
+            sun.position.set(5, 10, 5);
             scene.add(sun);
 
-            // Floor (The "GTA City" ground)
-            const floorGeom = new THREE.PlaneGeometry(200, 200);
-            const floorMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
-            const floor = new THREE.Mesh(floorGeom, floorMat);
-            floor.rotation.x = -Math.PI / 2;
-            floor.receiveShadow = true;
-            scene.add(floor);
+            // Ground
+            const grid = new THREE.GridHelper(100, 50, 0xff00ff, 0x444444);
+            scene.add(grid);
 
-            // Load Spider-Gwen Model
+            // LOAD MODEL
             const loader = new GLTFLoader();
-            loader.load('./spider_gwen.glb', (gltf) => {
-                player = gltf.scene;
-                player.scale.set(1, 1, 1);
-                player.traverse(child => { if(child.isMesh) child.castShadow = true; });
-                scene.add(player);
+            // IMPORTANT: Ensure 'spider_gwen.glb' is in the SAME folder as this HTML file
+            loader.load('./spider_gwen.glb', 
+                (gltf) => {
+                    player = gltf.scene;
+                    scene.add(player);
+                    statusEl.innerText = "Gwen Ready! Use Joystick";
+                    
+                    mixer = new THREE.AnimationMixer(player);
+                    gltf.animations.forEach(clip => {
+                        actions[clip.name.toLowerCase()] = mixer.clipAction(clip);
+                    });
 
-                // Setup Animations
-                mixer = new THREE.AnimationMixer(player);
-                gltf.animations.forEach(clip => {
-                    // This maps your model's poses to triggers
-                    animations[clip.name.toLowerCase()] = mixer.clipAction(clip);
-                    console.log("Loaded animation:", clip.name);
-                });
+                    // Auto-play first animation found
+                    if (gltf.animations.length > 0) {
+                        currentAction = mixer.clipAction(gltf.animations[0]);
+                        currentAction.play();
+                    }
+                    animate();
+                },
+                undefined,
+                (error) => {
+                    debugEl.innerText = "Error loading model: " + error.message;
+                    statusEl.innerText = "Model Not Found!";
+                }
+            );
 
-                // Start with Idle pose if exists
-                if(animations['idle']) animations['idle'].play();
-                
-                spawnNPCs(10);
-                animate();
+            // Joystick Setup
+            const joystick = nipplejs.create({
+                zone: document.getElementById('joystick-zone'),
+                mode: 'static',
+                position: { left: '75px', bottom: '75px' },
+                color: 'magenta'
             });
 
-            // Inputs
-            window.addEventListener('keydown', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = true; });
-            window.addEventListener('keyup', (e) => { if(keys.hasOwnProperty(e.key.toLowerCase())) keys[e.key.toLowerCase()] = false; });
-            window.addEventListener('mousedown', () => playAction('hit')); // Trigger hit pose
-        }
+            joystick.on('move', (evt, data) => {
+                moveData.x = data.vector.x;
+                moveData.y = data.vector.y;
+                moveData.active = true;
+            });
 
-        function playAction(name) {
-            const action = animations[name];
-            if (action && currentAction !== action) {
-                if (currentAction) currentAction.fadeOut(0.2);
-                action.reset().fadeIn(0.2).play();
-                currentAction = action;
-            }
-        }
-
-        function spawnNPCs(count) {
-            for(let i=0; i<count; i++) {
-                const npc = new THREE.Mesh(
-                    new THREE.BoxGeometry(1, 2, 1),
-                    new THREE.MeshPhongMaterial({ color: Math.random() * 0xffffff })
-                );
-                npc.position.set(Math.random()*40-20, 1, Math.random()*40-20);
-                scene.add(npc);
-                npcs.push(npc);
-            }
-            document.getElementById('npc-count').innerText = npcs.length;
-        }
-
-        function updatePlayer(dt) {
-            if (!player) return;
-
-            let speed = keys.shift ? 0.2 : 0.1;
-            let moving = false;
-
-            if (keys.w) { player.translateZ(speed); moving = true; }
-            if (keys.s) { player.translateZ(-speed); moving = true; }
-            if (keys.a) { player.rotation.y += 0.05; moving = true; }
-            if (keys.d) { player.rotation.y -= 0.05; moving = true; }
-
-            // Animation Logic
-            if (moving) {
-                if (keys.shift) playAction('run');
-                else playAction('walk');
-            } else {
-                playAction('idle');
-            }
-
-            // Camera follow (Third Person)
-            const relativeCameraOffset = new THREE.Vector3(0, 5, -10);
-            const cameraOffset = relativeCameraOffset.applyMatrix4(player.matrixWorld);
-            camera.position.lerp(cameraOffset, 0.1);
-            camera.lookAt(player.position.x, player.position.y + 2, player.position.z);
+            joystick.on('end', () => {
+                moveData.active = false;
+            });
         }
 
         function animate() {
             requestAnimationFrame(animate);
             const dt = clock.getDelta();
+
             if (mixer) mixer.update(dt);
-            updatePlayer(dt);
+
+            if (player && moveData.active) {
+                // Move player based on joystick
+                player.position.x += moveData.x * 0.1;
+                player.position.z -= moveData.y * 0.1;
+                
+                // Rotate player to face direction
+                const angle = Math.atan2(moveData.x, moveData.y);
+                player.rotation.y = angle;
+
+                // Follow camera
+                camera.position.set(player.position.x, player.position.y + 5, player.position.z + 10);
+                camera.lookAt(player.position);
+            }
+
             renderer.render(scene, camera);
         }
 
